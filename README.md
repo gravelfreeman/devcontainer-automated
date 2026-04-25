@@ -75,7 +75,7 @@ colima start
 
 ## Usage
 
-Run the script from the root of a project that has a `.devcontainer/` directory:
+Run the script from the root of a project that has a `.devcontainer` directory:
 
 ```bash
 devcontainer-automated [options] [command]
@@ -96,46 +96,6 @@ Flags:
 - `--shell <shell>`: shell command used for the interactive shell, defaults to `bash`
 - `--workspace <path>`: use a workspace path instead of the current directory, defaults to `/workspaces/<project-folder>`
 - `--debug`: enable debug logs
-
-## Recommended workflow
-
-The intended workflow is simple:
-
-1. Add the script to your `PATH`.
-2. Open your normal terminal on the host.
-3. `cd` into the project directory.
-4. Run one command.
-
-Example:
-
-```bash
-cd ~/dev/my-project
-devcontainer-automated --vault <vault>
-```
-
-without changing directory first:
-
-```bash
-devcontainer-automated --workspace ~/dev/my-project --vault <vault>
-```
-
-with a custom container user:
-
-```bash
-devcontainer-automated --vault <vault> --user app
-```
-
-with `zsh` inside the container:
-
-```bash
-devcontainer-automated --vault <vault> --shell zsh
-```
-
-store one command per project, so you never type anything manually:
-
-```bash
-cd ~/dev/my-project && devcontainer-automated --vault <vault>
-```
 
 ## Rebuild behavior
 
