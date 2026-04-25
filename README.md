@@ -50,13 +50,13 @@ The script reads the token from:
 op://<vault>/onepassword/OP_SERVICE_ACCOUNT_TOKEN
 ```
 
-That means:
+That means in 1Password you must have the following:
 
-- `--vault` must point to the vault that contains the token
 - the item name must be `onepassword`
 - the field name must be `OP_SERVICE_ACCOUNT_TOKEN`
+- retrieve `--vault` id with `op vault list` in a terminal
 
-⚠️ You can omit the `vault` flag and pass `--token <token>` directly, but this is strongly discouraged because it puts a critical secret in plaintext on your host.
+⚠️ Caution: Using `--token` instead puts the secret in plaintext on your host.
 
 ## Install
 
@@ -153,8 +153,6 @@ This keeps the workflow fast while still reacting to real devcontainer config ch
 
 ## Why Colima
 
-This script intentionally targets Colima, not Docker Desktop.
-
-Colima is a better fit for this workflow because it is smaller, more script-friendly, and focused on giving you a local container runtime without a lot of extra product surface. If all you want is devcontainers on macOS, Docker Desktop can feel heavy for no real benefit here.
+Colima is a better fit for this workflow because it is smaller and focused on giving you a local container runtime without a lot of extra product surface. If all you want is devcontainers on macOS, Docker Desktop can feel heavy for no real benefit here.
 
 This project treats Colima as a practical bridge, not a forever choice. As soon as this workflow can be replaced cleanly by Apple Containers, future versions of the script will likely drop Colima support.
