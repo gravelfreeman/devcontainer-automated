@@ -93,7 +93,7 @@ Flags:
 - `--vault <vault>`: vault used to retrieve `OP_SERVICE_ACCOUNT_TOKEN`
 - `--token <token>`: use a service account token directly instead of reading it from 1Password
 - `--user <user>`: container user used for the interactive shell, defaults to `vscode`
-- `--shell <shell>`: shell command used for the interactive shell, defaults to `bash`
+- `--shell <shell>`: shell command used for the interactive shell, defaults to `zsh`
 - `--workspace <path>`: use a workspace path instead of the current directory, defaults to `/workspaces/<project-folder>`
 - `--debug`: enable debug logs
 

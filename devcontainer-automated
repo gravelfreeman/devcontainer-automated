@@ -12,7 +12,7 @@ PROXY_SOCKET="/tmp/1password-ssh-agent.sock"
 VAULT=""
 SERVICE_ACCOUNT_TOKEN=""
 CONTAINER_USER="vscode"
-CONTAINER_SHELL="bash"
+CONTAINER_SHELL="zsh"
 LOG_LEVEL=info
 
 log() {
@@ -37,7 +37,7 @@ Options:
   --vault <vault>         1Password vault containing OP_SERVICE_ACCOUNT_TOKEN
   --token <token>         Use a service account token directly
   --user <user>           Container user for the interactive shell (default: vscode)
-  --shell <shell>         Container shell command for the interactive shell (default: bash)
+  --shell <shell>         Container shell command for the interactive shell (default: zsh)
   --workspace <path>      Use a workspace path instead of the current directory
   --debug                 Enable debug logs
 EOF
