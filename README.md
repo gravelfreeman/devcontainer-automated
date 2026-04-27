@@ -6,57 +6,23 @@
 
 `devcontainer-automated` is a macOS-only, opinionated helper script for people who want a nearly zero-config per-project devcontainer workflow without giving up host-native quality of life.
 
-It lets you keep using your own terminal app, your host SSH agent, and the nice 1Password prompts, while opening VS Code directly in the right devcontainer, dropping your shell into that same container, and making `op` inside the devcontainer painless.
+It lets you keep using your own terminal app, your host SSH agent, and the nice 1Password prompts, while opening VS Code directly in the right devcontainer and dropping your shell into that same container.
 
-This is especially useful if you do not want to:
+### What it does :
 
-- live in the VS Code terminal
-- choose between "SSH works in VS Code" or "SSH works in my shell"
-- maintain different glue commands for every project
-- manually click "Reopen in Container" or "Attach to Container"
-- give up and run everything locally just because devcontainer setup is annoying
-
-## What it does
-
-- Opens VS Code directly inside the correct devcontainer
+- One reusable workflow instead of project-specific glue commands
+- Opens VS Code in a devcontainer, without "Reopen/Attach to Container" prompts
 - Opens your host terminal into the same running container
-- Forwards your host SSH agent into Colima so you can use 1Password prompts
-- Passes the service accout token at container creation so `op` is ready inside the devcontainer
-- Rebuilds only when needed: when the container does not exist, when it was removed, when the `.devcontainer` folder changed, or when you explicitly run `rebuild`
+- Keeps SSH working in both VS Code and your host shell, including 1Password prompts
+- Automated rebuilds, only when needed *([Rebuild behavior](#rebuild-behavior))*
 
 ## Requirements
 
 - A project directory that contains a `.devcontainer` folder
-- Colima installed and running, with working `ssh colima` setup
-- VS Code installed with the `code` command available in your `PATH`
-- Dev Containers CLI installed (`devcontainer` command)
-- Docker CLI installed (`docker` command)
-- 1Password CLI installed (`op` command)
-
-## 1Password requirement
-
-To create a new devcontainer, the script needs access to a 1Password service account token.
-
-This is not mandatory for every possible setup, but it is a very practical part of this workflow if you use `op` inside the devcontainer. You authenticate once on the host during container creation with the usual 1Password sign-in prompt, and after that you do not have to keep entering passwords inside the devcontainer.
-
-Create a service account using the official 1Password documentation:
-
-- [1Password Service Accounts](https://developer.1password.com/docs/service-accounts/)
-- [Get started with 1Password Service Accounts](https://developer.1password.com/docs/service-accounts/get-started/)
-
-The script reads the token from:
-
-```text
-op://<vault>/onepassword/OP_SERVICE_ACCOUNT_TOKEN
-```
-
-That means in 1Password you must have the following:
-
-- the item name must be `onepassword`
-- the field name must be `OP_SERVICE_ACCOUNT_TOKEN`
-- retrieve `--vault` id with `op vault list` in a terminal
-
-⚠️ Caution: Using `--token` instead puts the secret in plaintext on your host.
+- [colima](formulae.brew.sh/formula/colima) installed and running, with working `ssh colima` setup
+- [vscode](formulae.brew.sh/cask/visual-studio-code) application installed (`code` command)
+- [devcontainer](formulae.brew.sh/formula/devcontainer) CLI installed (`devcontainer` command)
+- [docker](formulae.brew.sh/formula/docker) CLI installed (`docker` command)
 
 ## Install
 
@@ -90,12 +56,21 @@ Commands:
 
 Flags:
 
-- `--vault <vault>`: vault used to retrieve `OP_SERVICE_ACCOUNT_TOKEN`
-- `--token <token>`: use a service account token directly instead of reading it from 1Password
 - `--user <user>`: container user used for the interactive shell, defaults to `vscode`
 - `--shell <shell>`: shell command used for the interactive shell, defaults to `zsh`
 - `--workspace <path>`: use a workspace path instead of the current directory, defaults to `/workspaces/<project-folder>`
 - `--debug`: enable debug logs
+
+<details>
+<summary>Advanced options</summary>
+
+You can optionally pass a [1Password service account](https://developer.1password.com/docs/service-accounts/get-started/) token through `remoteEnv` to keep `op` authenticated inside the devcontainer, **but this is insecure and not recommended**.
+
+- `--vault <vault>`: read `OP_SERVICE_ACCOUNT_TOKEN`
+- `--token <token>`: pass a service account token directly
+
+</details>
+
 
 ## Rebuild behavior
 
@@ -104,15 +79,14 @@ The script hashes the contents of the `.devcontainer` directory and stores that 
 In practice:
 
 - if the container exists and the `.devcontainer` hash did not change, it reuses the container
-- if the container exists but is stopped, it starts it
 - if the container is missing, it creates it
 - if the `.devcontainer` hash changed, it recreates the container
 - if you run `rebuild`, it recreates the container no matter what
 
 This keeps the workflow fast while still reacting to real devcontainer config changes.
 
-## Why Colima
+## Current implementation choices
 
-Colima is a better fit for this workflow because it is smaller and focused on giving you a local container runtime without a lot of extra product surface. If all you want is devcontainers on macOS, Docker Desktop can feel heavy for no real benefit here.
+Colima is a practical fit for this workflow today because it stays lightweight and focused on local container runtime needs, without the extra surface area of Docker Desktop. Contributions to make the script work cleanly with Docker Desktop or Apple Containers are welcome.
 
-This project treats Colima as a practical bridge, not a forever choice. As soon as this workflow can be replaced cleanly by Apple Containers, future versions of the script will likely drop Colima support.
+1Password is a practical fit for this workflow today because it is the SSH agent setup I'm currently using. Contributions to make the script work cleanly with SSH agents beyond 1Password are welcome.

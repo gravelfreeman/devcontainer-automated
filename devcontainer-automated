@@ -34,11 +34,11 @@ Commands:
   shell    Open a shell in the running devcontainer
 
 Options:
-  --vault <vault>         1Password vault containing OP_SERVICE_ACCOUNT_TOKEN
-  --token <token>         Use a service account token directly
   --user <user>           Container user for the interactive shell (default: vscode)
   --shell <shell>         Container shell command for the interactive shell (default: zsh)
   --workspace <path>      Use a workspace path instead of the current directory
+  --vault <vault>         Read OP_SERVICE_ACCOUNT_TOKEN from 1Password (insecure)
+  --token <token>         Pass OP_SERVICE_ACCOUNT_TOKEN directly (insecure)
   --debug                 Enable debug logs
 EOF
 }
@@ -161,23 +161,15 @@ prepare_container() {
 
     if [[ -z "${cid}" ]]; then
         log "Creating devcontainer"
-        token="$(service_account_token)" || {
-            case "${command}" in
-                code)
-                    log error "No devcontainer found. Re-run with --vault <vault> or --token <token> to create it first."
-                    exit 1
-                    ;;
-                shell)
-                    log error "No devcontainer found. Re-run with --vault <vault> or --token <token> to create it first."
-                    exit 1
-                    ;;
-                *)
-                    log error "Missing --vault <vault> or --token <token> to create the devcontainer."
-                    exit 1
-                    ;;
-            esac
-        }
-        OP_SERVICE_ACCOUNT_TOKEN="${token}" log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
+        if [[ -n "${SERVICE_ACCOUNT_TOKEN}" || -n "${VAULT}" ]]; then
+            if [[ -n "${VAULT}" ]]; then
+                log warn "Using --vault passes OP_SERVICE_ACCOUNT_TOKEN to devcontainer creation. This relies on remoteEnv and is not considered secure."
+            fi
+            token="$(service_account_token)" || { log error "Failed to retrieve OP_SERVICE_ACCOUNT_TOKEN."; exit 1; }
+            OP_SERVICE_ACCOUNT_TOKEN="${token}" log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
+        else
+            log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
+        fi
         printf '%s\n' "${current_hash}" >"${HASH_FILE}"
         return 0
     fi
@@ -303,7 +295,7 @@ check_dependencies() {
             for dep in awk code devcontainer docker od shasum ssh tr xargs; do
                 command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
             done
-            [[ -n "${SERVICE_ACCOUNT_TOKEN}" ]] || {
+            [[ -z "${VAULT}" ]] || {
                 command -v op >/dev/null 2>&1 || missing+=("op")
             }
             ;;
@@ -316,7 +308,7 @@ check_dependencies() {
             for dep in awk devcontainer docker od shasum ssh tr xargs; do
                 command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
             done
-            [[ -n "${SERVICE_ACCOUNT_TOKEN}" ]] || {
+            [[ -z "${VAULT}" ]] || {
                 command -v op >/dev/null 2>&1 || missing+=("op")
             }
             ;;
@@ -326,13 +318,20 @@ check_dependencies() {
 }
 
 main() {
+    local token_source=none
+
     parse_args "$@"
     [[ "${COMMAND}" == "help" ]] && {
         usage
         return 0
     }
     set_workspace "${WORKSPACE_DIR}"
-    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} vault=${VAULT:-<empty>} user=${CONTAINER_USER} shell=${CONTAINER_SHELL} token_source=$([[ -n "${SERVICE_ACCOUNT_TOKEN}" ]] && printf 'flag' || printf 'vault')"
+    if [[ -n "${SERVICE_ACCOUNT_TOKEN}" ]]; then
+        token_source=flag
+    elif [[ -n "${VAULT}" ]]; then
+        token_source=vault
+    fi
+    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} vault=${VAULT:-<empty>} user=${CONTAINER_USER} shell=${CONTAINER_SHELL} token_source=${token_source}"
 
     case "${COMMAND}" in
         run)
@@ -348,7 +347,6 @@ main() {
         rebuild)
             require_workspace_config
             check_dependencies rebuild
-            [[ -n "${VAULT}" || -n "${SERVICE_ACCOUNT_TOKEN}" ]] || { usage; log error "Missing --vault <vault> or --token <token> for rebuild."; exit 1; }
             run_flow true true true rebuild
             ;;
         shell)
