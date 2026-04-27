@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
+DEFAULT_TEMPLATE_REPO="https://github.com/gravelfreeman/devcontainer-automated.git"
 WORKSPACE_DIR="$(pwd -P)"
 CONTAINER_DIR="/workspaces/${WORKSPACE_DIR##*/}"
 WORKSPACE_KEY="$(printf '%s' "${WORKSPACE_DIR}" | od -An -tx1 | tr -d ' \n')"
@@ -11,14 +12,16 @@ HASH_FILE="${TMPDIR:-/tmp}/devcontainer-init/${WORKSPACE_KEY}.hash"
 PROXY_SOCKET="/tmp/1password-ssh-agent.sock"
 VAULT=""
 SERVICE_ACCOUNT_TOKEN=""
+TEMPLATE_SOURCE=""
+TEMPLATE_OVERRIDE=""
 CONTAINER_USER="vscode"
 CONTAINER_SHELL="bash"
 LOG_LEVEL=info
 
 log() {
-    local level=info levels=" debug info warn error "
+    local level=info levels=" debug info warning error "
 
-    case "${1:-}" in info | error | debug | warn) level="$1"; shift ;; esac
+    case "${1:-}" in info | error | debug | warning) level="$1"; shift ;; esac
     [[ "${levels}" == *" ${LOG_LEVEL} "* ]] || LOG_LEVEL=info
     [[ "${level}" == debug && "${LOG_LEVEL}" != debug ]] && return 0
     printf '[%s] %s\n' "${level}" "$*" >&2
@@ -29,18 +32,29 @@ usage() {
 Usage: ${SCRIPT_NAME} [options] [command]
 
 Commands:
+  init     Initialize a project with the default .devcontainer template
   rebuild  Force rebuild a devcontainer
   code     Open VS Code in the devcontainer
   shell    Open a shell in the running devcontainer
 
 Options:
+  --help                  Show this help message
+  --source <github-user>  Use https://github.com/<user>/devcontainer-automated.git for init
   --user <user>           Container user for the interactive shell (default: vscode)
   --shell <shell>         Container shell command for the interactive shell (default: bash)
   --workspace <path>      Use a workspace path instead of the current directory
   --vault <vault>         Read OP_SERVICE_ACCOUNT_TOKEN from 1Password (insecure)
   --token <token>         Pass OP_SERVICE_ACCOUNT_TOKEN directly (insecure)
+  --template <path|url>   Use a custom init template repo or local path for init
   --debug                 Enable debug logs
 EOF
+}
+
+usage_error() {
+    log error "$1"
+    printf '\n' >&2
+    usage >&2
+    exit 1
 }
 
 set_workspace() {
@@ -59,10 +73,124 @@ set_workspace() {
     HASH_FILE="${TMPDIR:-/tmp}/devcontainer-init/${WORKSPACE_KEY}.hash"
 }
 
+project_name() {
+    basename "${WORKSPACE_DIR}"
+}
+
+clear_previous_line() {
+    [[ -t 1 ]] || return 0
+    printf '\033[1A\r\033[2K' >&2
+}
+
+github_template_repo() {
+    local source="${1}"
+
+    if [[ "${source}" == */* ]]; then
+        printf 'https://github.com/%s.git\n' "${source}"
+        return 0
+    fi
+
+    printf 'https://github.com/%s/devcontainer-automated.git\n' "${source}"
+}
+
+template_repo() {
+    if [[ -n "${TEMPLATE_SOURCE}" ]]; then
+        github_template_repo "${TEMPLATE_SOURCE}"
+        return 0
+    fi
+
+    if [[ -n "${TEMPLATE_OVERRIDE}" ]]; then
+        printf '%s\n' "${TEMPLATE_OVERRIDE}"
+        return 0
+    fi
+
+    printf '%s\n' "${DEFAULT_TEMPLATE_REPO}"
+}
+
+template_dir() {
+    local source="${1}"
+
+    if [[ -d "${source}/.devcontainer" ]]; then
+        printf '%s\n' "${source}/.devcontainer"
+        return 0
+    fi
+
+    if [[ -d "${source}" && "$(basename "${source}")" == ".devcontainer" ]]; then
+        printf '%s\n' "${source}"
+        return 0
+    fi
+
+    return 1
+}
+
+init_workspace() {
+    local project repo template_path tmp_dir init_message
+    project="$(project_name)"
+    repo="$(template_repo)"
+
+    [[ ! -e "${WORKSPACE_DIR}/.devcontainer" ]] || {
+        log warning "${project} already has a .devcontainer"
+        exit 1
+    }
+
+    init_message="Initializing ${project}"
+    if [[ -n "${TEMPLATE_SOURCE}" ]]; then
+        init_message+=" with custom template from ${TEMPLATE_SOURCE}"
+    elif [[ -n "${TEMPLATE_OVERRIDE}" ]]; then
+        init_message+=" with custom template at ${repo}"
+    fi
+
+    log "${init_message}"
+    if template_path="$(template_dir "${repo}")"; then
+        cp -R "${template_path}" "${WORKSPACE_DIR}/" \
+            || { log error "Failed to copy .devcontainer into ${project}"; exit 1; }
+    else
+        tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/devcontainer-automated-init.XXXXXX")"
+        git clone --depth 1 "${repo}" "${tmp_dir}" >/dev/null 2>&1 \
+            || { rm -rf "${tmp_dir}"; log error "Failed to clone devcontainer template from ${repo}"; exit 1; }
+        cp -R "${tmp_dir}/.devcontainer" "${WORKSPACE_DIR}/" \
+            || { rm -rf "${tmp_dir}"; log error "Failed to copy .devcontainer into ${project}"; exit 1; }
+        rm -rf "${tmp_dir}"
+    fi
+
+    log "Success: ${project} is initialized"
+}
+
+prompt_init_workspace() {
+    local project answer custom_source
+    project="$(project_name)"
+
+    [[ -t 0 ]] || {
+        log error "${project} doesn't have a .devcontainer yet. Run ${SCRIPT_NAME} init first."
+        exit 1
+    }
+
+    printf "%s doesn't have a .devcontainer yet, do you want to initialize a devcontainer in this project folder? [y/N] " "${project}" >&2
+    read -r answer || exit 1
+
+    case "${answer}" in
+        [Yy] | [Yy][Ee][Ss])
+            clear_previous_line
+            if [[ -z "${TEMPLATE_SOURCE}" && -z "${TEMPLATE_OVERRIDE}" ]]; then
+                printf "Enter GitHub username to use a custom template, or press Enter to use the default: " >&2
+                read -r custom_source || exit 1
+                clear_previous_line
+                [[ -z "${custom_source}" ]] || TEMPLATE_SOURCE="${custom_source}"
+            fi
+            check_dependencies init
+            init_workspace
+            exit 0
+            ;;
+        *)
+            log info "Aborted"
+            exit 0
+            ;;
+    esac
+}
+
 require_workspace_config() {
     [[ -d "${WORKSPACE_DIR}/.devcontainer" ]] || {
-        log error "No .devcontainer directory found in ${WORKSPACE_DIR}"
-        exit 1
+        prompt_init_workspace
     }
 }
 
@@ -163,7 +291,7 @@ prepare_container() {
         log "Creating devcontainer"
         if [[ -n "${SERVICE_ACCOUNT_TOKEN}" || -n "${VAULT}" ]]; then
             if [[ -n "${VAULT}" ]]; then
-                log warn "Using --vault passes OP_SERVICE_ACCOUNT_TOKEN to devcontainer creation. This relies on remoteEnv and is not considered secure."
+                log warning "Using --vault passes OP_SERVICE_ACCOUNT_TOKEN to devcontainer creation. This relies on remoteEnv and is not considered secure."
             fi
             token="$(service_account_token)" || { log error "Failed to retrieve OP_SERVICE_ACCOUNT_TOKEN."; exit 1; }
             OP_SERVICE_ACCOUNT_TOKEN="${token}" log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
@@ -244,43 +372,51 @@ parse_args() {
         case "$1" in
             --vault)
                 shift
-                [[ $# -gt 0 ]] || { log error "Missing value for --vault"; exit 1; }
+                [[ $# -gt 0 ]] || usage_error "Missing value for --vault"
                 VAULT="$1"
                 ;;
             --token)
                 shift
-                [[ $# -gt 0 ]] || { log error "Missing value for --token"; exit 1; }
+                [[ $# -gt 0 ]] || usage_error "Missing value for --token"
                 SERVICE_ACCOUNT_TOKEN="$1"
                 ;;
             --user)
                 shift
-                [[ $# -gt 0 ]] || { log error "Missing value for --user"; exit 1; }
+                [[ $# -gt 0 ]] || usage_error "Missing value for --user"
                 CONTAINER_USER="$1"
                 ;;
             --shell)
                 shift
-                [[ $# -gt 0 ]] || { log error "Missing value for --shell"; exit 1; }
+                [[ $# -gt 0 ]] || usage_error "Missing value for --shell"
                 CONTAINER_SHELL="$1"
                 ;;
             --workspace)
                 shift
-                [[ $# -gt 0 ]] || { log error "Missing value for --workspace"; exit 1; }
+                [[ $# -gt 0 ]] || usage_error "Missing value for --workspace"
                 WORKSPACE_DIR="$1"
+                ;;
+            --source)
+                shift
+                [[ $# -gt 0 ]] || usage_error "Missing value for --source"
+                TEMPLATE_SOURCE="$1"
+                ;;
+            --template)
+                shift
+                [[ $# -gt 0 ]] || usage_error "Missing value for --template"
+                TEMPLATE_OVERRIDE="$1"
                 ;;
             --debug)
                 LOG_LEVEL=debug
                 ;;
-            rebuild | code | shell)
+            init | rebuild | code | shell)
                 COMMAND="$1"
                 ;;
-            -h | --help | help)
+            --help)
                 COMMAND=help
                 return 0
                 ;;
             *)
-                usage
-                log error "Unknown argument: $1"
-                exit 1
+                usage_error "Unknown argument: $1"
                 ;;
         esac
         shift
@@ -288,7 +424,7 @@ parse_args() {
 }
 
 check_dependencies() {
-    local dep missing=()
+    local dep repo missing=()
 
     case "${1}" in
         run | code | rebuild)
@@ -303,6 +439,15 @@ check_dependencies() {
             for dep in docker od tr; do
                 command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
             done
+            ;;
+        init)
+            for dep in cp mktemp; do
+                command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
+            done
+            repo="$(template_repo)"
+            if ! template_dir "${repo}" >/dev/null 2>&1; then
+                command -v git >/dev/null 2>&1 || missing+=("git")
+            fi
             ;;
         shell-bootstrap)
             for dep in awk devcontainer docker od shasum ssh tr xargs; do
@@ -331,9 +476,13 @@ main() {
     elif [[ -n "${VAULT}" ]]; then
         token_source=vault
     fi
-    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} vault=${VAULT:-<empty>} user=${CONTAINER_USER} shell=${CONTAINER_SHELL} token_source=${token_source}"
+    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} source=${TEMPLATE_SOURCE:-<empty>} template=${TEMPLATE_OVERRIDE:-<empty>} vault=${VAULT:-<empty>} user=${CONTAINER_USER} shell=${CONTAINER_SHELL} token_source=${token_source}"
 
     case "${COMMAND}" in
+        init)
+            check_dependencies init
+            init_workspace
+            ;;
         run)
             require_workspace_config
             check_dependencies run
@@ -353,9 +502,7 @@ main() {
             run_shell_flow
             ;;
         *)
-            usage
-            log error "Unknown command: ${COMMAND}"
-            exit 1
+            usage_error "Unknown command: ${COMMAND}"
             ;;
     esac
 }
