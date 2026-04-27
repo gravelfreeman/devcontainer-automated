@@ -39,6 +39,30 @@ Then start Colima:
 colima start
 ```
 
+## Template
+
+This repository includes an optional template in the `.devcontainer` folder at the root of the repo, which is a good starting point if you want to bootstrap a new project quickly.
+
+> Copy the `.devcontainer` folder into your project directory.
+
+By default, this template:
+
+- uses the `mcr.microsoft.com/devcontainers/base:ubuntu` base image
+- mounts your host `~/.gitconfig` read-only into the container
+- mounts your host `~/.ssh` read-only into the container
+- mounts the 1Password SSH agent socket at `/tmp/ssh-agent.sock`
+- sets `SSH_AUTH_SOCK` inside the container
+- runs `.devcontainer/onCreateCommand.sh` when the container is created
+
+What it does on create:
+
+- generates `~/.ssh/config` in the container with `IdentityAgent /tmp/ssh-agent.sock`
+- includes `~/.ssh/1Password/config` automatically if it exists on the host
+- copies `known_hosts` from the host into the container if available
+- generates `~/.gitconfig` in the container by including the host git config
+- configures Git SSH signing support with `ssh-keygen`
+- marks the workspace directory as a Git `safe.directory`
+
 ## Usage
 
 Run the script from the root of a project that has a `.devcontainer` directory:
