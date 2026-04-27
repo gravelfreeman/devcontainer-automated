@@ -57,7 +57,7 @@ Commands:
 Flags:
 
 - `--user <user>`: container user used for the interactive shell, defaults to `vscode`
-- `--shell <shell>`: shell command used for the interactive shell, defaults to `zsh`
+- `--shell <shell>`: shell command used for the interactive shell, defaults to `bash`
 - `--workspace <path>`: use a workspace path instead of the current directory, defaults to `/workspaces/<project-folder>`
 - `--debug`: enable debug logs
 
