@@ -19,10 +19,10 @@ It lets you keep using your own terminal app, your host SSH agent, and the nice 
 ## Requirements
 
 - A project directory that contains a `.devcontainer` folder
-- [colima](formulae.brew.sh/formula/colima) installed and running, with working `ssh colima` setup
-- [vscode](formulae.brew.sh/cask/visual-studio-code) application installed (`code` command)
-- [devcontainer](formulae.brew.sh/formula/devcontainer) CLI installed (`devcontainer` command)
-- [docker](formulae.brew.sh/formula/docker) CLI installed (`docker` command)
+- [colima](https://formulae.brew.sh/formula/colima) installed and running, with working `ssh colima` setup
+- [vscode](https://formulae.brew.sh/cask/visual-studio-code) application installed (`code` command)
+- [devcontainer](https://formulae.brew.sh/formula/devcontainer) CLI installed (`devcontainer` command)
+- [docker](https://formulae.brew.sh/formula/docker) CLI installed (`docker` command)
 
 ## Install
 
