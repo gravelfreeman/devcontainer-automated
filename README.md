@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="./images/devcontainer-automated.png" alt="devcontainer-automated logo" width="280">
+  <img src="./images/devcontainer-automated.png" width="280">
 </p>
 
 # devcontainer-automated
 
 `devcontainer-automated` is a **macOS-only**, opinionated helper script for people who want a *nearly zero-config* per-project devcontainer workflow without giving up host-native quality of life.
 
-It lets you keep using **your own terminal app**, **your host SSH agent**, and the nice 1Password prompts, while opening VS Code directly in the right devcontainer and dropping your shell into that same container.
+It lets you keep using **your own terminal app**, **your host SSH agent**, and the nice 1Password prompts, while opening VS Code directly in the right devcontain
 
 ### What it does :
 
@@ -15,6 +15,8 @@ It lets you keep using **your own terminal app**, **your host SSH agent**, and t
 - Opens your host terminal into the **same running container**
 - Keeps SSH working in both VS Code and your host shell, including **1Password prompts**
 - **Automated rebuilds**, only when needed *([Rebuild behavior](#rebuild-behavior))*
+
+<img width="800" height="100" src="./images/demo.gif" />
 
 ## Requirements
 
@@ -93,11 +95,8 @@ Flags:
 - `--help`: show the help message
 - `--shell <shell>`: shell command used for the interactive shell, defaults to `bash`
 - `--source <github-user>`: for `init`, use `https://github.com/<user>/devcontainer-automated.git`
-- `--template <path|url>`: for `init`, use a custom repo URL or a local path containing `.devcontainer`
 - `--user <user>`: container user used for the interactive shell, defaults to `vscode`
 - `--workspace <path>`: use a workspace path instead of the current directory, defaults to `/workspaces/<project-folder>`
-
-If both `--source` and `--template` are provided, **`--source` wins**.
 
 <details>
 <summary>Advanced options</summary>
@@ -106,6 +105,7 @@ You can optionally pass a [1Password service account](https://developer.1passwor
 
 - `--vault <vault>`: read `OP_SERVICE_ACCOUNT_TOKEN`
 - `--token <token>`: pass a service account token directly
+- `--template <path|url>`: for `init`, use a custom repo URL or a local path containing `.devcontainer`
 
 </details>
 
