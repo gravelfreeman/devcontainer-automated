@@ -3,20 +3,28 @@ set -Eeuo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
 DEFAULT_TEMPLATE_REPO="https://github.com/gravelfreeman/devcontainer-automated.git"
+CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/devcontainer-automated"
+CONFIG_FILE="${CONFIG_DIR}/config.toml"
+CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/devcontainer-automated"
 WORKSPACE_DIR="$(pwd -P)"
-CONTAINER_DIR="/workspaces/${WORKSPACE_DIR##*/}"
 WORKSPACE_KEY="$(printf '%s' "${WORKSPACE_DIR}" | od -An -tx1 | tr -d ' \n')"
-FOLDER_URI="vscode-remote://dev-container+${WORKSPACE_KEY}${CONTAINER_DIR}"
 CONTAINER_LABEL="devcontainer.local_folder=${WORKSPACE_DIR}"
 HASH_FILE="${TMPDIR:-/tmp}/devcontainer-init/${WORKSPACE_KEY}.hash"
-PROXY_SOCKET="/tmp/1password-ssh-agent.sock"
+PROXY_SOCKET="/tmp/devcontainer-automated-ssh-agent.sock"
 VAULT=""
 SERVICE_ACCOUNT_TOKEN=""
 TEMPLATE_SOURCE=""
 TEMPLATE_OVERRIDE=""
-CONTAINER_USER="vscode"
 CONTAINER_SHELL="bash"
+CONTAINER_SHELL_FROM_CLI=false
+RUNTIME_TYPE=""
+RUNTIME_DOCKER_HOST=""
+SSH_AGENT_SOCKET=""
+HOST_GITCONFIG=""
+HOST_SSH_DIR=""
 LOG_LEVEL=info
+COMMAND=run
+FORCE_ENROLL=false
 
 log() {
     local level=info levels=" debug info warning error "
@@ -32,20 +40,21 @@ usage() {
 Usage: ${SCRIPT_NAME} [options] [command]
 
 Commands:
+  enroll   Create or refresh ${CONFIG_FILE}
   init     Initialize a project with the default .devcontainer template
-  rebuild  Force rebuild a devcontainer
-  code     Open VS Code in the devcontainer
+  up       Create or start a devcontainer
+  rebuild  Force rebuild a devcontainer, then open a shell
   shell    Open a shell in the running devcontainer
 
 Options:
   --help                  Show this help message
   --source <github-user>  Use https://github.com/<user>/devcontainer-automated.git for init
-  --user <user>           Container user for the interactive shell (default: vscode)
   --shell <shell>         Container shell command for the interactive shell (default: bash)
   --workspace <path>      Use a workspace path instead of the current directory
   --vault <vault>         Read OP_SERVICE_ACCOUNT_TOKEN from 1Password (insecure)
   --token <token>         Pass OP_SERVICE_ACCOUNT_TOKEN directly (insecure)
   --template <path|url>   Use a custom init template repo or local path for init
+  --force                 Overwrite an existing config when used with enroll
   --debug                 Enable debug logs
 EOF
 }
@@ -66,9 +75,7 @@ set_workspace() {
     }
 
     WORKSPACE_DIR="$(cd "${requested_dir}" && pwd -P)"
-    CONTAINER_DIR="/workspaces/${WORKSPACE_DIR##*/}"
     WORKSPACE_KEY="$(printf '%s' "${WORKSPACE_DIR}" | od -An -tx1 | tr -d ' \n')"
-    FOLDER_URI="vscode-remote://dev-container+${WORKSPACE_KEY}${CONTAINER_DIR}"
     CONTAINER_LABEL="devcontainer.local_folder=${WORKSPACE_DIR}"
     HASH_FILE="${TMPDIR:-/tmp}/devcontainer-init/${WORKSPACE_KEY}.hash"
 }
@@ -80,6 +87,131 @@ project_name() {
 clear_previous_line() {
     [[ -t 1 ]] || return 0
     printf '\033[1A\r\033[2K' >&2
+}
+
+trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "${value}"
+}
+
+toml_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "${value}"
+}
+
+append_choice() {
+    local labels_ref="$1" values_ref="$2" label="$3" value="$4"
+    local existing
+    local -n target_labels="${labels_ref}" target_values="${values_ref}"
+
+    for existing in "${target_values[@]}"; do
+        [[ "${existing}" == "${value}" ]] && return 0
+    done
+
+    target_labels+=("${label}")
+    target_values+=("${value}")
+}
+
+select_choice() {
+    local title="$1" default_value="$2" allow_empty="$3"
+    local labels=() values=()
+    local answer custom i default_index=1 prompt_default
+    shift 3
+
+    while (($# > 1)); do
+        labels+=("$1")
+        values+=("$2")
+        shift 2
+    done
+
+    printf '\n%s\n' "${title}" >&2
+    for i in "${!labels[@]}"; do
+        printf '  %d) %s\n' "$((i + 1))" "${labels[$i]}" >&2
+        [[ "${values[$i]}" == "${default_value}" ]] && default_index="$((i + 1))"
+    done
+    printf '  c) Custom value\n' >&2
+
+    while true; do
+        prompt_default="${default_index}"
+        ((${#values[@]} > 0)) || prompt_default=c
+        printf 'Select [%s]: ' "${prompt_default}" >&2
+        read -r answer || exit 1
+
+        if [[ -z "${answer}" ]]; then
+            if ((${#values[@]} > 0)); then
+                printf '%s\n' "${values[$((default_index - 1))]}"
+                return 0
+            fi
+            answer=c
+        fi
+
+        if [[ "${answer}" =~ ^[0-9]+$ ]] && ((answer >= 1 && answer <= ${#values[@]})); then
+            printf '%s\n' "${values[$((answer - 1))]}"
+            return 0
+        fi
+
+        case "${answer}" in
+            [Cc])
+                while true; do
+                    printf 'Custom value: ' >&2
+                    read -r custom || exit 1
+                    if [[ -n "${custom}" || "${allow_empty}" == "true" ]]; then
+                        printf '%s\n' "${custom}"
+                        return 0
+                    fi
+                    log error "Value cannot be empty"
+                done
+                ;;
+            *)
+                log error "Invalid selection: ${answer}"
+                ;;
+        esac
+    done
+}
+
+choose_from_arrays() {
+    local title="$1" default_value="$2" allow_empty="$3" labels_ref="$4" values_ref="$5"
+    local args=() i
+    local -n source_labels="${labels_ref}" source_values="${values_ref}"
+
+    for i in "${!source_labels[@]}"; do
+        args+=("${source_labels[$i]}" "${source_values[$i]}")
+    done
+
+    select_choice "${title}" "${default_value}" "${allow_empty}" "${args[@]}"
+}
+
+ssh_agent_identity_count() {
+    local socket="$1" output count
+
+    [[ -S "${socket}" ]] || {
+        printf '0\n'
+        return 0
+    }
+
+    command -v ssh-add >/dev/null 2>&1 || {
+        printf '0\n'
+        return 0
+    }
+
+    output="$(SSH_AUTH_SOCK="${socket}" ssh-add -L 2>/dev/null || true)"
+    count="$(printf '%s\n' "${output}" | awk '/^(ssh-|ecdsa-|sk-)/ { count++ } END { print count + 0 }')"
+    printf '%s\n' "${count}"
+}
+
+ssh_agent_label() {
+    local socket="$1" count
+
+    count="$(ssh_agent_identity_count "${socket}")"
+    if ((count > 0)); then
+        printf '%s (%s identities)\n' "${socket}" "${count}"
+    else
+        printf '%s (no identities)\n' "${socket}"
+    fi
 }
 
 github_template_repo() {
@@ -194,47 +326,390 @@ require_workspace_config() {
     }
 }
 
-use_colima() {
-    unset DOCKER_CONTEXT
-    export DOCKER_HOST="ssh://colima"
-    log debug "Using Colima via DOCKER_HOST=${DOCKER_HOST}"
+detect_runtime() {
+    RUNTIME_TYPE="local"
+    RUNTIME_DOCKER_HOST=""
+
+    case "$(uname -s)" in
+        Darwin)
+            if command -v colima >/dev/null 2>&1 || ssh -S none colima true >/dev/null 2>&1; then
+                RUNTIME_TYPE="colima"
+                RUNTIME_DOCKER_HOST="ssh://colima"
+            fi
+            ;;
+    esac
 }
 
-start_proxy() {
-    log "Starting 1Password SSH agent proxy"
+detect_paths() {
+    case "${RUNTIME_TYPE}" in
+        colima)
+            SSH_AGENT_SOCKET="${PROXY_SOCKET}"
+            ;;
+        *)
+            detect_ssh_agent_socket
+            ;;
+    esac
 
-    if ssh -S none colima \
-        "test -S '${PROXY_SOCKET}' && SSH_AUTH_SOCK='${PROXY_SOCKET}' ssh-add -L >/dev/null 2>&1" \
-        >/dev/null 2>&1; then
-        log debug "Reusing existing SSH agent proxy at ${PROXY_SOCKET}"
+    [[ -f "${HOME}/.gitconfig" ]] && HOST_GITCONFIG="${HOME}/.gitconfig" || HOST_GITCONFIG="${CACHE_DIR}/host.gitconfig"
+    [[ -d "${HOME}/.ssh" ]] && HOST_SSH_DIR="${HOME}/.ssh" || HOST_SSH_DIR="${CACHE_DIR}/host-ssh"
+}
+
+detect_ssh_agent_socket() {
+    local candidate
+    local candidates=()
+
+    [[ -n "${SSH_AUTH_SOCK:-}" ]] && candidates+=("${SSH_AUTH_SOCK}")
+    candidates+=("${HOME}/.1password/agent.sock" "/tmp/1password-ssh-agent.sock")
+
+    for candidate in "${candidates[@]}"; do
+        [[ -S "${candidate}" ]] || continue
+        if (("$(ssh_agent_identity_count "${candidate}")" > 0)); then
+            SSH_AGENT_SOCKET="${candidate}"
+            return 0
+        fi
+    done
+
+    for candidate in "${candidates[@]}"; do
+        [[ -S "${candidate}" ]] || continue
+        SSH_AGENT_SOCKET="${candidate}"
+        return 0
+    done
+
+    SSH_AGENT_SOCKET=""
+}
+
+prompt_runtime_config() {
+    local labels=() values=()
+    local selected
+
+    append_choice labels values "Local Docker daemon (empty DOCKER_HOST)" ""
+    append_choice labels values "Colima over SSH (ssh://colima)" "ssh://colima"
+    [[ -n "${RUNTIME_DOCKER_HOST}" ]] && append_choice labels values "Detected Docker host (${RUNTIME_DOCKER_HOST})" "${RUNTIME_DOCKER_HOST}"
+
+    selected="$(choose_from_arrays "Docker host" "${RUNTIME_DOCKER_HOST}" true labels values)"
+    RUNTIME_DOCKER_HOST="${selected}"
+
+    if [[ "${RUNTIME_DOCKER_HOST}" == "ssh://colima" ]]; then
+        RUNTIME_TYPE="colima"
+    else
+        RUNTIME_TYPE="local"
+    fi
+}
+
+prompt_ssh_agent_config() {
+    local labels=() values=()
+    local candidates=()
+    local candidate
+
+    if [[ "${RUNTIME_TYPE}" == "colima" ]]; then
+        append_choice labels values "Colima proxy socket, created automatically (${PROXY_SOCKET})" "${PROXY_SOCKET}"
+    else
+        [[ -n "${SSH_AUTH_SOCK:-}" ]] && candidates+=("${SSH_AUTH_SOCK}")
+        candidates+=("${HOME}/.1password/agent.sock" "/tmp/1password-ssh-agent.sock")
+        [[ -n "${SSH_AGENT_SOCKET}" ]] && candidates+=("${SSH_AGENT_SOCKET}")
+
+        for candidate in "${candidates[@]}"; do
+            [[ -S "${candidate}" ]] || continue
+            (("$(ssh_agent_identity_count "${candidate}")" > 0)) || continue
+            append_choice labels values "$(ssh_agent_label "${candidate}")" "${candidate}"
+        done
+
+        for candidate in "${candidates[@]}"; do
+            [[ -S "${candidate}" ]] || continue
+            (("$(ssh_agent_identity_count "${candidate}")" == 0)) || continue
+            append_choice labels values "$(ssh_agent_label "${candidate}")" "${candidate}"
+        done
+    fi
+
+    SSH_AGENT_SOCKET="$(choose_from_arrays "SSH agent socket" "${SSH_AGENT_SOCKET}" false labels values)"
+}
+
+prompt_gitconfig_config() {
+    local labels=() values=()
+
+    [[ -f "${HOME}/.gitconfig" ]] && append_choice labels values "${HOME}/.gitconfig" "${HOME}/.gitconfig"
+    [[ -n "${HOST_GITCONFIG}" ]] && append_choice labels values "${HOST_GITCONFIG}" "${HOST_GITCONFIG}"
+    append_choice labels values "Generated empty config (${CACHE_DIR}/host.gitconfig)" "${CACHE_DIR}/host.gitconfig"
+
+    HOST_GITCONFIG="$(choose_from_arrays "Git config path" "${HOST_GITCONFIG}" false labels values)"
+}
+
+prompt_ssh_dir_config() {
+    local labels=() values=()
+
+    [[ -d "${HOME}/.ssh" ]] && append_choice labels values "${HOME}/.ssh" "${HOME}/.ssh"
+    [[ -n "${HOST_SSH_DIR}" ]] && append_choice labels values "${HOST_SSH_DIR}" "${HOST_SSH_DIR}"
+    append_choice labels values "Generated empty SSH directory (${CACHE_DIR}/host-ssh)" "${CACHE_DIR}/host-ssh"
+
+    HOST_SSH_DIR="$(choose_from_arrays "SSH directory path" "${HOST_SSH_DIR}" false labels values)"
+}
+
+prompt_container_config() {
+    CONTAINER_SHELL="$(select_choice "Container shell command" "${CONTAINER_SHELL}" false \
+        "bash" "bash" \
+        "zsh" "zsh" \
+        "sh" "sh")"
+}
+
+prompt_enroll_config() {
+    prompt_runtime_config
+    prompt_ssh_agent_config
+    prompt_gitconfig_config
+    prompt_ssh_dir_config
+    prompt_container_config
+}
+
+write_config() {
+    install -d -m 0700 "${CONFIG_DIR}" "${CACHE_DIR}"
+
+    {
+        printf '[runtime]\n'
+        printf 'type = "%s"\n' "$(toml_escape "${RUNTIME_TYPE}")"
+        printf 'docker_host = "%s"\n\n' "$(toml_escape "${RUNTIME_DOCKER_HOST}")"
+        printf '[paths]\n'
+        printf 'ssh_agent_socket = "%s"\n' "$(toml_escape "${SSH_AGENT_SOCKET}")"
+        printf 'gitconfig = "%s"\n' "$(toml_escape "${HOST_GITCONFIG}")"
+        printf 'ssh_dir = "%s"\n\n' "$(toml_escape "${HOST_SSH_DIR}")"
+        printf '[container]\n'
+        printf 'shell = "%s"\n' "$(toml_escape "${CONTAINER_SHELL}")"
+    } >"${CONFIG_FILE}"
+    chmod 0600 "${CONFIG_FILE}"
+}
+
+enroll_config() {
+    local missing=()
+
+    if [[ -f "${CONFIG_FILE}" && "${FORCE_ENROLL}" != "true" ]]; then
+        log info "Config already exists: ${CONFIG_FILE}"
+        log info "Use '${SCRIPT_NAME} enroll --force' to refresh it."
         return 0
     fi
 
-    log debug "Creating SSH agent proxy at ${PROXY_SOCKET}"
+    detect_runtime
+    detect_paths
+    if [[ -t 0 ]]; then
+        prompt_enroll_config
+    fi
+    write_config
+    prepare_config_files
+
+    [[ -n "${SSH_AGENT_SOCKET}" ]] || missing+=("paths.ssh_agent_socket")
+    [[ -n "${HOST_GITCONFIG}" ]] || missing+=("paths.gitconfig")
+    [[ -n "${HOST_SSH_DIR}" ]] || missing+=("paths.ssh_dir")
+
+    log info "Wrote ${CONFIG_FILE}"
+
+    if ((${#missing[@]} > 0)); then
+        log error "Couldn't detect: ${missing[*]}"
+        log error "Edit ${CONFIG_FILE} manually, then run ${SCRIPT_NAME} again."
+        exit 1
+    fi
+}
+
+parse_config_assignment() {
+    local section="$1" key="$2" value="$3"
+
+    case "${section}.${key}" in
+        runtime.type) RUNTIME_TYPE="${value}" ;;
+        runtime.docker_host) RUNTIME_DOCKER_HOST="${value}" ;;
+        paths.ssh_agent_socket) SSH_AGENT_SOCKET="${value}" ;;
+        paths.gitconfig) HOST_GITCONFIG="${value}" ;;
+        paths.ssh_dir) HOST_SSH_DIR="${value}" ;;
+        container.user) ;;
+        container.shell) [[ "${CONTAINER_SHELL_FROM_CLI}" == "true" ]] || CONTAINER_SHELL="${value}" ;;
+        *) usage_error "Unknown config key in ${CONFIG_FILE}: ${section}.${key}" ;;
+    esac
+}
+
+load_config() {
+    local section="" raw line key value answer
+
+    [[ -f "${CONFIG_FILE}" ]] || {
+        if [[ -t 0 ]]; then
+            printf "No devcontainer-automated config found. Enroll this machine now? [Y/n] " >&2
+            read -r answer || exit 1
+            case "${answer}" in
+                "" | [Yy] | [Yy][Ee][Ss])
+                    clear_previous_line
+                    enroll_config
+                    ;;
+                *)
+                    log info "Aborted"
+                    exit 0
+                    ;;
+            esac
+        else
+            log error "Missing config: ${CONFIG_FILE}. Run ${SCRIPT_NAME} enroll first."
+            exit 1
+        fi
+    }
+
+    while IFS= read -r raw || [[ -n "${raw}" ]]; do
+        line="$(trim "${raw%%#*}")"
+        [[ -z "${line}" ]] && continue
+
+        if [[ "${line}" =~ ^\[(runtime|paths|container)\]$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            continue
+        fi
+
+        if [[ "${line}" =~ ^([a-z_]+)[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            value="${value//\\\"/\"}"
+            value="${value//\\\\/\\}"
+            [[ -n "${section}" ]] || usage_error "Config key outside a section in ${CONFIG_FILE}: ${key}"
+            parse_config_assignment "${section}" "${key}" "${value}"
+            continue
+        fi
+
+        usage_error "Unsupported config line in ${CONFIG_FILE}: ${raw}"
+    done <"${CONFIG_FILE}"
+}
+
+validate_config() {
+    local missing=()
+
+    case "${RUNTIME_TYPE}" in
+        local | colima) ;;
+        "") missing+=("runtime.type") ;;
+        *) log error "Unsupported runtime.type in ${CONFIG_FILE}: ${RUNTIME_TYPE}"; exit 1 ;;
+    esac
+
+    [[ -n "${SSH_AGENT_SOCKET}" ]] || missing+=("paths.ssh_agent_socket")
+    [[ -n "${HOST_GITCONFIG}" ]] || missing+=("paths.gitconfig")
+    [[ -n "${HOST_SSH_DIR}" ]] || missing+=("paths.ssh_dir")
+    [[ -n "${CONTAINER_SHELL}" ]] || missing+=("container.shell")
+
+    if ((${#missing[@]} > 0)); then
+        log error "Missing config value(s): ${missing[*]}"
+        log error "Edit ${CONFIG_FILE} or run ${SCRIPT_NAME} enroll --force."
+        exit 1
+    fi
+}
+
+prepare_config_files() {
+    install -d -m 0700 "${CACHE_DIR}"
+
+    if [[ "${HOST_GITCONFIG}" == "${CACHE_DIR}/"* && ! -e "${HOST_GITCONFIG}" ]]; then
+        : >"${HOST_GITCONFIG}"
+        chmod 0600 "${HOST_GITCONFIG}"
+    fi
+
+    if [[ "${HOST_SSH_DIR}" == "${CACHE_DIR}/"* && ! -e "${HOST_SSH_DIR}" ]]; then
+        install -d -m 0700 "${HOST_SSH_DIR}"
+    fi
+}
+
+apply_runtime() {
+    if [[ -n "${RUNTIME_DOCKER_HOST}" ]]; then
+        unset DOCKER_CONTEXT
+        export DOCKER_HOST="${RUNTIME_DOCKER_HOST}"
+        log debug "Using Docker host ${DOCKER_HOST}"
+        return 0
+    fi
+
+    unset DOCKER_HOST
+    log debug "Using local Docker host"
+}
+
+start_colima_proxy() {
+    log "Starting SSH agent proxy"
+
+    if ssh -S none colima \
+        "test -S '${SSH_AGENT_SOCKET}' && SSH_AUTH_SOCK='${SSH_AGENT_SOCKET}' ssh-add -L >/dev/null 2>&1" \
+        >/dev/null 2>&1; then
+        log debug "Reusing existing SSH agent proxy at ${SSH_AGENT_SOCKET}"
+        return 0
+    fi
+
+    log debug "Creating SSH agent proxy at ${SSH_AGENT_SOCKET}"
     ssh -S none -A -f colima \
-        "rm -f '${PROXY_SOCKET}'; \
-         exec socat UNIX-LISTEN:${PROXY_SOCKET},fork,unlink-early,mode=660 UNIX-CONNECT:\"\$SSH_AUTH_SOCK\"" \
+        "rm -f '${SSH_AGENT_SOCKET}'; \
+         exec socat UNIX-LISTEN:${SSH_AGENT_SOCKET},fork,unlink-early,mode=660 UNIX-CONNECT:\"\$SSH_AUTH_SOCK\"" \
         >/dev/null 2>&1
 
     for _ in {1..20}; do
         if ssh -S none colima \
-            "test -S '${PROXY_SOCKET}' && SSH_AUTH_SOCK='${PROXY_SOCKET}' ssh-add -L >/dev/null 2>&1" \
+            "test -S '${SSH_AGENT_SOCKET}' && SSH_AUTH_SOCK='${SSH_AGENT_SOCKET}' ssh-add -L >/dev/null 2>&1" \
             >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.2
     done
 
-    log error "SSH agent proxy socket was not created: ${PROXY_SOCKET}"
+    log error "SSH agent proxy socket was not created: ${SSH_AGENT_SOCKET}"
+    exit 1
+}
+
+prepare_runtime() {
+    prepare_config_files
+    apply_runtime
+
+    case "${RUNTIME_TYPE}" in
+        colima)
+            start_colima_proxy
+            ;;
+        local)
+            [[ -S "${SSH_AGENT_SOCKET}" ]] || {
+                log error "SSH agent socket not found: ${SSH_AGENT_SOCKET}"
+                log error "Edit ${CONFIG_FILE} or run ${SCRIPT_NAME} enroll --force."
+                exit 1
+            }
+            ;;
+    esac
+
+    [[ -f "${HOST_GITCONFIG}" ]] || {
+        log error "Git config path not found: ${HOST_GITCONFIG}"
+        log error "Edit ${CONFIG_FILE} or run ${SCRIPT_NAME} enroll --force."
+        exit 1
+    }
+
+    [[ -d "${HOST_SSH_DIR}" ]] || {
+        log error "SSH directory path not found: ${HOST_SSH_DIR}"
+        log error "Edit ${CONFIG_FILE} or run ${SCRIPT_NAME} enroll --force."
+        exit 1
+    }
+
+    export DEVCONTAINER_AUTOMATED_SSH_AGENT_SOCKET="${SSH_AGENT_SOCKET}"
+    export DEVCONTAINER_AUTOMATED_GITCONFIG="${HOST_GITCONFIG}"
+    export DEVCONTAINER_AUTOMATED_SSH_DIR="${HOST_SSH_DIR}"
+}
+
+hash_command() {
+    if command -v shasum >/dev/null 2>&1; then
+        printf 'shasum\n'
+        return 0
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf 'sha256sum\n'
+        return 0
+    fi
+
+    log error "Missing required command: shasum or sha256sum"
     exit 1
 }
 
 config_hash() {
+    local hasher
+    hasher="$(hash_command)"
+
     find "${WORKSPACE_DIR}/.devcontainer" -type f ! -name '.hash' -print0 \
-        | xargs -0 shasum \
+        | xargs -0 "${hasher}" \
         | LC_ALL=C sort \
-        | shasum \
+        | "${hasher}" \
         | awk '{print $1}'
+}
+
+add_missing_commands() {
+    local missing_ref="$1" dep
+    shift
+    local -n missing_commands="${missing_ref}"
+
+    for dep in "$@"; do
+        command -v "${dep}" >/dev/null 2>&1 || missing_commands+=("${dep}")
+    done
 }
 
 container_id() {
@@ -268,10 +743,29 @@ service_account_token() {
     op read "op://${VAULT}/onepassword/OP_SERVICE_ACCOUNT_TOKEN"
 }
 
+devcontainer_up() {
+    local token
+
+    if [[ -z "${SERVICE_ACCOUNT_TOKEN}" && -z "${VAULT}" ]]; then
+        log_preview devcontainer up
+        return $?
+    fi
+
+    if [[ -n "${VAULT}" ]]; then
+        log warning "Using --vault passes OP_SERVICE_ACCOUNT_TOKEN to devcontainer creation. This relies on remoteEnv and is not considered secure."
+    fi
+
+    token="$(service_account_token)" || {
+        log error "Failed to retrieve OP_SERVICE_ACCOUNT_TOKEN."
+        exit 1
+    }
+    OP_SERVICE_ACCOUNT_TOKEN="${token}" log_preview devcontainer up
+}
+
 prepare_container() {
     local force="${1:-false}"
     local command="${2:-run}"
-    local current_hash cached_hash cid running_cid token
+    local current_hash cached_hash cid running_cid
 
     mkdir -p "$(dirname "${HASH_FILE}")"
     current_hash="$(config_hash)"
@@ -289,30 +783,17 @@ prepare_container() {
 
     if [[ -z "${cid}" ]]; then
         log "Creating devcontainer"
-        if [[ -n "${SERVICE_ACCOUNT_TOKEN}" || -n "${VAULT}" ]]; then
-            if [[ -n "${VAULT}" ]]; then
-                log warning "Using --vault passes OP_SERVICE_ACCOUNT_TOKEN to devcontainer creation. This relies on remoteEnv and is not considered secure."
-            fi
-            token="$(service_account_token)" || { log error "Failed to retrieve OP_SERVICE_ACCOUNT_TOKEN."; exit 1; }
-            OP_SERVICE_ACCOUNT_TOKEN="${token}" log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
-        else
-            log_preview devcontainer up || { log error "Failed to create devcontainer"; exit 1; }
-        fi
+        devcontainer_up || { log error "Failed to create devcontainer"; exit 1; }
         printf '%s\n' "${current_hash}" >"${HASH_FILE}"
         return 0
     fi
 
     if [[ -z "${running_cid}" ]]; then
         log "Starting existing devcontainer"
-        log_preview devcontainer up || { log error "Failed to start existing devcontainer"; exit 1; }
+        devcontainer_up || { log error "Failed to start existing devcontainer"; exit 1; }
     fi
 
     [[ "${current_hash}" == "${cached_hash}" ]] || printf '%s\n' "${current_hash}" >"${HASH_FILE}"
-}
-
-open_code() {
-    log "Opening VS Code in devcontainer"
-    code -n --folder-uri "${FOLDER_URI}"
 }
 
 open_shell() {
@@ -322,23 +803,22 @@ open_shell() {
     [[ -n "${cid}" ]] || { log error "No running devcontainer found for ${WORKSPACE_DIR}"; exit 1; }
     clear
 
-    exec docker exec -u "${CONTAINER_USER}" -w "${CONTAINER_DIR}" -it "${cid}" \
+    exec devcontainer exec --workspace-folder "${WORKSPACE_DIR}" \
         "${CONTAINER_SHELL}" -lc 'clear; exec "$0" -il' "${CONTAINER_SHELL}"
 }
 
 run_flow() {
     local force="${1:-false}"
-    local open_vscode="${2:-false}"
-    local open_terminal="${3:-false}"
-    local command="${4:-run}"
+    local open_terminal="${2:-false}"
+    local command="${3:-run}"
 
-    log debug "run_flow force=${force} open_vscode=${open_vscode} open_terminal=${open_terminal} command=${command}"
-    use_colima
-    start_proxy
+    log debug "run_flow force=${force} open_terminal=${open_terminal} command=${command}"
+    load_config
+    validate_config
+    check_dependencies "${command}"
+    require_workspace_config
+    prepare_runtime
     prepare_container "${force}" "${command}"
-    if [[ "${open_vscode}" == "true" ]]; then
-        open_code
-    fi
     if [[ "${open_terminal}" == "true" ]]; then
         open_shell
     fi
@@ -348,8 +828,10 @@ run_shell_flow() {
     local running_cid
 
     log debug "run_shell_flow workspace=${WORKSPACE_DIR}"
+    load_config
+    validate_config
     check_dependencies shell
-    use_colima
+    prepare_runtime
     running_cid="$(container_id running)"
 
     if [[ -n "${running_cid}" ]]; then
@@ -360,14 +842,11 @@ run_shell_flow() {
 
     require_workspace_config
     check_dependencies shell-bootstrap
-    start_proxy
     prepare_container false shell
     open_shell
 }
 
 parse_args() {
-    COMMAND=run
-
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --vault)
@@ -380,15 +859,11 @@ parse_args() {
                 [[ $# -gt 0 ]] || usage_error "Missing value for --token"
                 SERVICE_ACCOUNT_TOKEN="$1"
                 ;;
-            --user)
-                shift
-                [[ $# -gt 0 ]] || usage_error "Missing value for --user"
-                CONTAINER_USER="$1"
-                ;;
             --shell)
                 shift
                 [[ $# -gt 0 ]] || usage_error "Missing value for --shell"
                 CONTAINER_SHELL="$1"
+                CONTAINER_SHELL_FROM_CLI=true
                 ;;
             --workspace)
                 shift
@@ -405,10 +880,13 @@ parse_args() {
                 [[ $# -gt 0 ]] || usage_error "Missing value for --template"
                 TEMPLATE_OVERRIDE="$1"
                 ;;
+            --force)
+                FORCE_ENROLL=true
+                ;;
             --debug)
                 LOG_LEVEL=debug
                 ;;
-            init | rebuild | code | shell)
+            enroll | init | up | rebuild | shell)
                 COMMAND="$1"
                 ;;
             --help)
@@ -424,79 +902,68 @@ parse_args() {
 }
 
 check_dependencies() {
-    local dep repo missing=()
+    local repo missing=()
+    local common_deps=(awk devcontainer docker od tr xargs)
 
     case "${1}" in
-        run | code | rebuild)
-            for dep in awk code devcontainer docker od shasum ssh tr xargs; do
-                command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
-            done
-            [[ -z "${VAULT}" ]] || {
-                command -v op >/dev/null 2>&1 || missing+=("op")
-            }
-            ;;
-        shell)
-            for dep in docker od tr; do
-                command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
-            done
+        run | up | rebuild)
+            add_missing_commands missing "${common_deps[@]}"
             ;;
         init)
-            for dep in cp mktemp; do
-                command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
-            done
+            add_missing_commands missing cp mktemp
             repo="$(template_repo)"
             if ! template_dir "${repo}" >/dev/null 2>&1; then
-                command -v git >/dev/null 2>&1 || missing+=("git")
+                add_missing_commands missing git
             fi
             ;;
-        shell-bootstrap)
-            for dep in awk devcontainer docker od shasum ssh tr xargs; do
-                command -v "${dep}" >/dev/null 2>&1 || missing+=("${dep}")
-            done
-            [[ -z "${VAULT}" ]] || {
-                command -v op >/dev/null 2>&1 || missing+=("op")
-            }
+        shell | shell-bootstrap)
+            add_missing_commands missing "${common_deps[@]}"
+            ;;
+        enroll)
+            add_missing_commands missing chmod install uname
             ;;
     esac
+
+    case "${1}" in
+        run | up | rebuild | shell-bootstrap)
+            hash_command >/dev/null
+            [[ -z "${VAULT}" ]] || add_missing_commands missing op
+            ;;
+    esac
+
+    if [[ "${RUNTIME_TYPE:-}" == "colima" ]]; then
+        add_missing_commands missing ssh ssh-add
+    fi
 
     ((${#missing[@]} == 0)) || { log error "Missing required command(s): ${missing[*]}"; exit 1; }
 }
 
 main() {
-    local token_source=none
-
     parse_args "$@"
     [[ "${COMMAND}" == "help" ]] && {
         usage
         return 0
     }
     set_workspace "${WORKSPACE_DIR}"
-    if [[ -n "${SERVICE_ACCOUNT_TOKEN}" ]]; then
-        token_source=flag
-    elif [[ -n "${VAULT}" ]]; then
-        token_source=vault
-    fi
-    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} source=${TEMPLATE_SOURCE:-<empty>} template=${TEMPLATE_OVERRIDE:-<empty>} vault=${VAULT:-<empty>} user=${CONTAINER_USER} shell=${CONTAINER_SHELL} token_source=${token_source}"
+    log debug "Workspace=${WORKSPACE_DIR} command=${COMMAND} source=${TEMPLATE_SOURCE:-<empty>} template=${TEMPLATE_OVERRIDE:-<empty>} vault=${VAULT:-<empty>} shell=${CONTAINER_SHELL}"
 
     case "${COMMAND}" in
+        enroll)
+            check_dependencies enroll
+            enroll_config
+            ;;
         init)
             check_dependencies init
             init_workspace
             ;;
         run)
-            require_workspace_config
-            check_dependencies run
-            run_flow false true true run
+            run_flow false true run
             ;;
-        code)
-            require_workspace_config
-            check_dependencies code
-            run_flow false true false code
+        up)
+            run_flow false false up
             ;;
         rebuild)
-            require_workspace_config
-            check_dependencies rebuild
-            run_flow true true true rebuild
+            run_flow true true rebuild
             ;;
         shell)
             run_shell_flow
@@ -530,7 +997,7 @@ log_preview() {
         while IFS= read -r line; do
             ((shown++))
             printf '\033[2K'
-            (( ${#line} >= width )) && line="${line:0:width-1}…"
+            (( ${#line} >= width )) && line="${line:0:width-1}..."
             printf '%b%s\033[0m\n' "${color}" "${line}"
         done <<< "${1}"
     }

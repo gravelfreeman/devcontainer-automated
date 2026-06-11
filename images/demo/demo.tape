@@ -56,7 +56,7 @@ Type "devcontainer_automated_state=1"
 Enter
 Type "else"
 Enter
-Type `printf '%s\n' '[info] Starting 1Password SSH agent proxy'`
+Type `printf '%s\n' '[info] Starting SSH agent proxy'`
 Enter
 Type "sleep 0.5"
 Enter
@@ -64,7 +64,7 @@ Type `printf '%s\n' '[info] Starting existing devcontainer'`
 Enter
 Type "sleep 0.5"
 Enter
-Type `printf '%s\n' '[info] Opening VS Code in devcontainer'`
+Type `printf '%s\n' '[info] Starting existing devcontainer'`
 Enter
 Type "sleep 0.5"
 Enter
@@ -74,7 +74,7 @@ Type "sleep 4"
 Enter
 Type "clear"
 Enter
-Type `export PS1=$'\[\e[32m\]vscode ➜ /workspaces/my-project \[\e[39m\](main) $ '`
+Type `export PS1=$'\[\e[32m\]dev ➜ /workspaces/my-project \[\e[39m\](main) $ '`
 Enter
 Type "fi"
 Enter
