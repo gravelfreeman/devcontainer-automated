@@ -22,21 +22,11 @@ It provides a clean, but *opinionated* **Linux** development workflow with **Git
 
 ## Requirements
 
-- `devcontainer` CLI
-- Docker
-- Git
 - 1Password desktop app with the SSH agent enabled
 - 1Password CLI at `/usr/bin/op`
 - OpenCode at `/usr/bin/opencode`
-
-The host must provide:
-
-- `~/.1password/agent.sock`
-- `~/.gitconfig`
-- `~/.1password`
-- `~/.config/opencode`
-- `~/.local/share/opencode`
-- `~/.local/state`
+- `devcontainer` CLI
+- Docker
 
 ## Install
 
@@ -49,31 +39,6 @@ Run it from a project directory:
 ```bash
 devcontainer-automated
 ```
-
-## Template
-
-Run `devcontainer-automated init` in a project without a `.devcontainer`
-directory to download the current template from this repository.
-
-The template uses the Linux host paths directly:
-
-- `~/.1password` → `/home/vscode/.1password`
-- `~/.gitconfig` → `/tmp/host.gitconfig`
-- `/run/user` → `/run/host-runtime`
-- `/usr/bin/op` → `/usr/bin/op`
-- `/usr/bin/opencode` → `/usr/bin/opencode`
-- `~/.config/opencode` → `/home/vscode/.config/opencode`
-- `~/.local/share/opencode` → `/home/vscode/.local/share/opencode`
-- `~/.local/state` → `/home/vscode/.local/state`
-
-On creation, the container:
-
-- initializes the 1Password app socket
-- retrieves `GitHub Auth Key` with `op`
-- creates `~/.ssh/github-auth.pub`
-- configures GitHub SSH access and local `known_hosts`
-- configures Git SSH signing with `ssh-keygen`
-- marks the workspace as a Git `safe.directory`
 
 ## Usage
 
@@ -100,6 +65,31 @@ devcontainer-automated [options] [command]
 | `--debug` | Enable debug logs. |
 | `--help` | Show the help message. |
 | `--workspace <path>` | Use another workspace directory. |
+
+## Template
+
+Run `devcontainer-automated init` in a project without a `.devcontainer`
+directory to download the current template from this repository.
+
+The template uses the Linux host paths directly:
+
+- `~/.1password` → `/home/vscode/.1password`
+- `~/.gitconfig` → `/tmp/host.gitconfig`
+- `/run/user` → `/run/host-runtime`
+- `/usr/bin/op` → `/usr/bin/op`
+- `/usr/bin/opencode` → `/usr/bin/opencode`
+- `~/.config/opencode` → `/home/vscode/.config/opencode`
+- `~/.local/share/opencode` → `/home/vscode/.local/share/opencode`
+- `~/.local/state` → `/home/vscode/.local/state`
+
+On creation, the container:
+
+- initializes the 1Password app socket
+- retrieves `GitHub Auth Key` with `op`
+- creates `~/.ssh/github-auth.pub`
+- configures GitHub SSH access and local `known_hosts`
+- configures Git SSH signing with `ssh-keygen`
+- marks the workspace as a Git `safe.directory`
 
 ## Opinionated choices
 
