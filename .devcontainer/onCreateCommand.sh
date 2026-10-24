@@ -2,43 +2,40 @@
 set -Eeuo pipefail
 
 workspace_dir="${1:-$PWD}"
-devcontainer_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+setup_op_socket() {
+  bash "$workspace_dir/.devcontainer/postStartCommand.sh"
+}
 
 setup_ssh_config() {
-  local ssh_auth_sock="/tmp/ssh-agent.sock"
-  local onepassword_include=""
-  local onepassword_mount="/tmp/host-ssh/1Password"
+  local github_auth_key_file="$HOME/.ssh/github-auth.pub"
+  local github_auth_key_tmp
 
   install -d -m 700 "$HOME/.ssh"
-  rm -rf "$HOME/.ssh/1Password"
+  touch "$HOME/.ssh/known_hosts"
 
-  if [ -d "$onepassword_mount" ]; then
-    ln -sfn "$onepassword_mount" "$HOME/.ssh/1Password"
-    onepassword_include="Include ~/.ssh/1Password/config"
+  github_auth_key_tmp="$(mktemp "${github_auth_key_file}.tmp.XXXXXX")"
+  if ! op item get "GitHub Auth Key" --fields "label=public key" --reveal >"$github_auth_key_tmp"; then
+    rm -f "$github_auth_key_tmp"
+    echo "Unable to read the GitHub authentication public key from 1Password" >&2
+    return 1
   fi
+  chmod 600 "$github_auth_key_tmp"
+  mv "$github_auth_key_tmp" "$github_auth_key_file"
 
-  if [ -f /tmp/host-ssh/known_hosts ]; then
-    cp /tmp/host-ssh/known_hosts "$HOME/.ssh/known_hosts"
-  fi
+  cp "$workspace_dir/.devcontainer/templates/.sshconfig" "$HOME/.ssh/config"
 
-  sed \
-    -e "s|__SSH_INCLUDE_1PASSWORD__|$onepassword_include|g" \
-    -e "s|__SSH_AUTH_SOCK__|$ssh_auth_sock|g" \
-    "$devcontainer_dir/templates/.sshconfig" >"$HOME/.ssh/config"
-
-  chmod 600 "$HOME/.ssh/config"
+  chmod 600 "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"
 }
 
 setup_git_config() {
-  local gitconfig_template
   local ssh_keygen_bin
 
-  gitconfig_template="$devcontainer_dir/templates/.gitconfig"
   ssh_keygen_bin="$(command -v ssh-keygen)"
 
   sed \
     -e "s|__SSH_KEYGEN__|$ssh_keygen_bin|g" \
-    "$gitconfig_template" >"$HOME/.gitconfig"
+    "$workspace_dir/.devcontainer/templates/.gitconfig" >"$HOME/.gitconfig"
 
   mkdir -p "$HOME/.config/git"
   git config --file "$HOME/.config/git/config" --replace-all safe.directory "$workspace_dir"
@@ -63,6 +60,8 @@ run_step() {
 }
 
 on_create() {
+  mkdir -p "$HOME/.config"
+  run_step "Setting up 1Password CLI socket" setup_op_socket
   run_step "Setting up SSH config" setup_ssh_config
   run_step "Setting up git config" setup_git_config
 }

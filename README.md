@@ -1,147 +1,111 @@
 <p align="center">
-  <img src="./images/devcontainer-automated.png" width="280">
+  <img src="./devcontainer-automated.png" width="280">
 </p>
 
 # devcontainer-automated
 
-`devcontainer-automated` is a small helper for starting, rebuilding, and entering per-project devcontainers from your terminal.
+`devcontainer-automated` is a lightweight CLI for managing repo-specific
+Dev Containers: create or start them, rebuild them when their configuration
+changes, and open an interactive shell.
 
-It is intentionally editor-agnostic. The script prepares the devcontainer; you can then connect to the running container from Zed or any other editor that supports Dev Containers.
+It provides a clean, but *opinionated* **Linux** development workflow with **Git** and **OpenCode** for editors such as **Zed**. Tools running inside the devcontainer can use **1Password**’s interactive host prompts for SSH access and `op` secret retrieval.
 
 ### What it does
 
-- Creates or starts a project devcontainer with `devcontainer up`
-- Opens your terminal into the same running container
-- Rebuilds only when the `.devcontainer` configuration changes
-- Keeps SSH agent forwarding configurable across Linux and macOS
-- Stores machine-specific paths in `~/.config/devcontainer-automated/config.toml`
+- creates or starts the project devcontainer
+- opens a `zsh` shell in the running container
+- reuses existing containers until `rebuild` is requested
+- configures SSH and Git through **1Password**
+- exposes **OpenCode** inside the container
 
 <img width="800" height="100" src="./images/demo.gif" />
 
 ## Requirements
 
-- `devcontainer` CLI installed
-- `docker` CLI installed
-- An SSH agent socket if your container needs SSH access
+- `devcontainer` CLI
+- Docker
+- Git
+- 1Password desktop app with the SSH agent enabled
+- 1Password CLI at `/usr/bin/op`
+- OpenCode at `/usr/bin/opencode`
 
-On macOS, Colima is supported through the generated config. On Linux, the default config uses the local Docker daemon.
+The host must provide:
+
+- `~/.1password/agent.sock`
+- `~/.gitconfig`
+- `~/.1password`
+- `~/.config/opencode`
+- `~/.local/share/opencode`
+- `~/.local/state`
 
 ## Install
 
-Make the script executable and put it on your `PATH`. For example:
-
 ```bash
-chmod +x devcontainer-automated
-mv devcontainer-automated ~/.local/bin/devcontainer-automated
+install -m 0755 devcontainer-automated ~/.local/bin/devcontainer-automated
 ```
 
-Then enroll the machine:
+Run it from a project directory:
 
 ```bash
-devcontainer-automated enroll
-```
-
-The first normal run also prompts for enroll when the config file is missing and stdin is interactive.
-
-## Config
-
-`enroll` shows detected choices for each value, including a custom option, then writes:
-
-```toml
-[runtime]
-type = "local"
-docker_host = ""
-
-[paths]
-ssh_agent_socket = "/run/user/1000/keyring/ssh"
-gitconfig = "/home/freeman/.gitconfig"
-ssh_dir = "/home/freeman/.ssh"
-
-[container]
-shell = "bash"
-```
-
-The paths are the paths visible to the Docker daemon.
-
-For Linux with local Docker, those are host paths. For macOS with Colima, `docker_host` is usually `ssh://colima`, and `ssh_agent_socket` points to the proxy socket created inside the Colima VM.
-
-For SSH agents, candidates with loaded identities are listed before empty agents.
-
-If a path cannot be detected, choose `Custom value` and enter the path manually.
-
-To refresh detection:
-
-```bash
-devcontainer-automated enroll --force
+devcontainer-automated
 ```
 
 ## Template
 
-By default, `devcontainer-automated init` initializes your project with the `.devcontainer` template from this repository.
+Run `devcontainer-automated init` in a project without a `.devcontainer`
+directory to download the current template from this repository.
 
-The template:
+The template uses the Linux host paths directly:
 
-- uses the `mcr.microsoft.com/devcontainers/base:ubuntu` base image
-- mounts the configured host Git config into the container
-- mounts the configured SSH agent socket at `/tmp/ssh-agent.sock`
-- mounts the configured host SSH directory read-only
-- runs `.devcontainer/onCreateCommand.sh` when the container is created
+- `~/.1password` → `/home/vscode/.1password`
+- `~/.gitconfig` → `/tmp/host.gitconfig`
+- `/run/user` → `/run/host-runtime`
+- `/usr/bin/op` → `/usr/bin/op`
+- `/usr/bin/opencode` → `/usr/bin/opencode`
+- `~/.config/opencode` → `/home/vscode/.config/opencode`
+- `~/.local/share/opencode` → `/home/vscode/.local/share/opencode`
+- `~/.local/state` → `/home/vscode/.local/state`
 
-What it does on create:
+On creation, the container:
 
-- generates `~/.ssh/config` in the container with `IdentityAgent /tmp/ssh-agent.sock`
-- includes `~/.ssh/1Password/config` automatically if it exists in the mounted SSH directory
-- copies `known_hosts` from the mounted SSH directory if available
-- generates `~/.gitconfig` in the container by including the mounted host Git config
-- configures Git SSH signing support with `ssh-keygen`
-- marks the workspace directory as a Git `safe.directory`
+- initializes the 1Password app socket
+- retrieves `GitHub Auth Key` with `op`
+- creates `~/.ssh/github-auth.pub`
+- configures GitHub SSH access and local `known_hosts`
+- configures Git SSH signing with `ssh-keygen`
+- marks the workspace as a Git `safe.directory`
 
 ## Usage
 
 Run the script from the root of your project:
 
-```bash
+```text
 devcontainer-automated [options] [command]
 ```
 
-Commands:
+### Commands
 
-- no command: create or start the devcontainer, then open a shell
-- `enroll`: create or refresh the machine config
-- `init`: initialize the current directory with the default or supplied template
-- `up`: create or start the devcontainer without opening a shell
-- `shell`: open a shell in the running devcontainer, creating it first if needed
-- `rebuild`: force-remove the existing container, recreate it, then open a shell
+| Command | Description |
+| --- | --- |
+| *(none)* | Create or start the container, then open `zsh`. |
+| `init` | Download and copy the current `.devcontainer` template. |
+| `up` | Create or start the container without opening a shell. |
+| `shell` | Open `zsh` in the running container. |
+| `rebuild` | Remove and recreate the container, then open `zsh`. |
 
-Flags:
+### Flags
 
-- `--debug`: enable debug logs
-- `--force`: overwrite config when used with `enroll`
-- `--help`: show the help message
-- `--shell <shell>`: shell command used for the interactive shell, defaults to `bash`
-- `--source <github-user>`: for `init`, use `https://github.com/<user>/devcontainer-automated.git`
-- `--template <path|url>`: for `init`, use a custom repo URL or a local path containing `.devcontainer`
-- `--workspace <path>`: use a workspace path instead of the current directory
+| Option | Description |
+| --- | --- |
+| `--debug` | Enable debug logs. |
+| `--help` | Show the help message. |
+| `--workspace <path>` | Use another workspace directory. |
 
-<details>
-<summary>Advanced options</summary>
+## Opinionated choices
 
-You can optionally pass a [1Password service account](https://developer.1password.com/docs/service-accounts/get-started/) token through `remoteEnv` to keep `op` authenticated inside the devcontainer, **but this is insecure and not recommended**.
+This project is intentionally built around a few personal choices:
 
-- `--vault <vault>`: read `OP_SERVICE_ACCOUNT_TOKEN`
-- `--token <token>`: pass a service account token directly
-
-</details>
-
-## Rebuild behavior
-
-The script hashes the contents of the `.devcontainer` directory and stores that hash in a temp file.
-
-In practice:
-
-- if the container exists and the `.devcontainer` hash did not change, it reuses the container
-- if the container is missing, it creates it
-- if the `.devcontainer` hash changed, it recreates the container
-- if you run `rebuild`, it recreates the container no matter what
-
-This keeps the workflow fast while still reacting to real devcontainer config changes.
+- **Linux**: Windows and macOS involves too many compromises and workarounds.
+- **1Password**: No FOSS alternative currently has a comparable feature set.
+- **OpenCode**: Connects to my LLM/MCP gateway so I can switch providers freely.
+- **Docker**: The simplest fit for my local homelab context.

@@ -3,14 +3,26 @@
   "name": "devcontainer-automated-template",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu@sha256:7ee7da33a68d997971660d91ecc8372e55a38a777c3c6bd6808daf91928052db",
   "mounts": [
-    "source=${localEnv:DEVCONTAINER_AUTOMATED_GITCONFIG},target=/tmp/host.gitconfig,type=bind,readonly",
-    "source=${localEnv:DEVCONTAINER_AUTOMATED_SSH_AGENT_SOCKET},target=/tmp/ssh-agent.sock,type=bind",
-    "source=${localEnv:DEVCONTAINER_AUTOMATED_SSH_DIR},target=/tmp/host-ssh,type=bind,readonly"
+    "source=${localEnv:HOME}/.1password,target=/home/vscode/.1password,type=bind",
+    "source=/run/user,target=/run/host-runtime,type=bind,readonly",
+    "source=/usr/bin/op,target=/usr/bin/op,type=bind,readonly",
+    "source=${localEnv:HOME}/.gitconfig,target=/tmp/host.gitconfig,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/opencode,target=/home/vscode/.config/opencode,type=bind,readonly",
+    "source=/usr/bin/opencode,target=/usr/bin/opencode,type=bind,readonly",
+    "source=${localEnv:HOME}/.local/share/opencode,target=/home/vscode/.local/share/opencode,type=bind",
+    "source=${localEnv:HOME}/.local/state,target=/home/vscode/.local/state,type=bind"
   ],
   "containerEnv": {
-    "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
+    "SHELL": "/bin/zsh",
+    "SSH_AUTH_SOCK": "/home/vscode/.1password/agent.sock",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "OP_BIOMETRIC_UNLOCK_ENABLED": "true"
   },
+  "runArgs": [
+    "--tmpfs=/run/user/1000:uid=1000,gid=1000,mode=700"
+  ],
   "onCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/onCreateCommand.sh ${containerWorkspaceFolder}",
+  "postStartCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postStartCommand.sh",
   "userEnvProbe": "loginInteractiveShell",
   "updateRemoteUserUID": false
 }
