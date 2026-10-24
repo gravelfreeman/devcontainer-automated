@@ -18,7 +18,7 @@ It provides a clean, but *opinionated* **Linux** development workflow with **Git
 - configures SSH and Git through **1Password**
 - exposes **OpenCode** inside the container
 
-https://github.com/user-attachments/assets/d9def20b-8a03-411e-b518-2c5399f39565
+<img width="960" height="722" alt="example" src="https://github.com/user-attachments/assets/bbfb5a18-a887-47a7-b855-9c2dc6265217" />
 
 ## Requirements
 
