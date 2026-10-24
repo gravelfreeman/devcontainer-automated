@@ -18,7 +18,7 @@ It provides a clean, but *opinionated* **Linux** development workflow with **Git
 - configures SSH and Git through **1Password**
 - exposes **OpenCode** inside the container
 
-<img width="960" height="722" alt="example" src="https://github.com/user-attachments/assets/bbfb5a18-a887-47a7-b855-9c2dc6265217" />
+<img width="806" height="606" alt="devcontainer-automated-demo" src="https://github.com/user-attachments/assets/4ae00a9d-9765-40fd-8c9a-08100fac944e" />
 
 ## Requirements
 
